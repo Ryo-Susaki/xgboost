@@ -91,7 +91,7 @@ __model_doc = '''
         node of the tree.
     min_child_weight : float
         Minimum sum of instance weight(hessian) needed in a child.
-    max_delta_step : int
+    max_delta_step : float
         Maximum delta step we allow each tree's weight estimation to be.
     subsample : float
         Subsample ratio of the training instance.
@@ -572,6 +572,13 @@ class XGBModel(XGBModelBase):
                 params.update({"eval_metric": eval_metric})
         return model, feval, params
 
+    def _set_evaluation_result(self, evals_result: Optional[dict]) -> None:
+        if evals_result:
+            for val in evals_result.items():
+                evals_result_key = list(val[1].keys())[0]
+                evals_result[val[0]][evals_result_key] = val[1][evals_result_key]
+            self.evals_result_ = evals_result
+
     @_deprecate_positional_args
     def fit(self, X, y, *, sample_weight=None, base_margin=None,
             eval_set=None, eval_metric=None, early_stopping_rounds=None,
@@ -646,12 +653,6 @@ class XGBModel(XGBModelBase):
                                                         save_best=True)]
 
         """
-        train_dmatrix = DMatrix(data=X, label=y, weight=sample_weight,
-                                base_margin=base_margin,
-                                missing=self.missing,
-                                nthread=self.n_jobs)
-        train_dmatrix.set_info(feature_weights=feature_weights)
-
         evals_result = {}
 
         train_dmatrix, evals = self._wrap_evaluation_matrices(
@@ -678,19 +679,19 @@ class XGBModel(XGBModelBase):
                               verbose_eval=verbose, xgb_model=model,
                               callbacks=callbacks)
 
-        if evals_result:
-            for val in evals_result.items():
-                evals_result_key = list(val[1].keys())[0]
-                evals_result[val[0]][evals_result_key] = val[1][
-                    evals_result_key]
-            self.evals_result_ = evals_result
-
+        self._set_evaluation_result(evals_result)
         return self
 
-    def predict(self, data, output_margin=False, ntree_limit=None,
-                validate_features=True, base_margin=None):
+    def predict(
+        self,
+        X,
+        output_margin=False,
+        ntree_limit=None,
+        validate_features=True,
+        base_margin=None
+    ):
         """
-        Predict with `data`.
+        Predict with `X`.
 
         .. note:: This function is not thread safe.
 
@@ -704,7 +705,7 @@ class XGBModel(XGBModelBase):
 
         Parameters
         ----------
-        data : array_like
+        X : array_like
             Data to predict with
         output_margin : bool
             Whether to output the raw untransformed margin value.
@@ -723,16 +724,21 @@ class XGBModel(XGBModelBase):
         prediction : numpy array
         """
         # pylint: disable=missing-docstring,invalid-name
-        test_dmatrix = DMatrix(data, base_margin=base_margin,
+        test_dmatrix = DMatrix(X, base_margin=base_margin,
                                missing=self.missing, nthread=self.n_jobs)
         # get ntree_limit to use - if none specified, default to
         # best_ntree_limit if defined, otherwise 0.
         if ntree_limit is None:
-            ntree_limit = getattr(self, "best_ntree_limit", 0)
-        return self.get_booster().predict(test_dmatrix,
-                                          output_margin=output_margin,
-                                          ntree_limit=ntree_limit,
-                                          validate_features=validate_features)
+            try:
+                ntree_limit = self.best_ntree_limit
+            except AttributeError:
+                ntree_limit = 0
+        return self.get_booster().predict(
+            test_dmatrix,
+            output_margin=output_margin,
+            ntree_limit=ntree_limit,
+            validate_features=validate_features
+        )
 
     def apply(self, X, ntree_limit=0):
         """Return the predicted leaf every tree for each sample.
@@ -1035,63 +1041,28 @@ class XGBClassifier(XGBModel, XGBClassifierBase):
         if not callable(self.objective):
             self.objective = params["objective"]
 
-        if evals_result:
-            for val in evals_result.items():
-                evals_result_key = list(val[1].keys())[0]
-                evals_result[val[0]][
-                    evals_result_key] = val[1][evals_result_key]
-            self.evals_result_ = evals_result
-
+        self._set_evaluation_result(evals_result)
         return self
 
     fit.__doc__ = XGBModel.fit.__doc__.replace(
         'Fit gradient boosting model',
         'Fit gradient boosting classifier', 1)
 
-    def predict(self, data, output_margin=False, ntree_limit=None,
-                validate_features=True, base_margin=None):
-        """
-        Predict with `data`.
-
-        .. note:: This function is not thread safe.
-
-          For each booster object, predict can only be called from one thread.
-          If you want to run prediction using multiple thread, call
-          ``xgb.copy()`` to make copies of model object and then call
-          ``predict()``.
-
-          .. code-block:: python
-
-            preds = bst.predict(dtest, ntree_limit=num_round)
-
-        Parameters
-        ----------
-        data : array_like
-            Feature matrix.
-        output_margin : bool
-            Whether to output the raw untransformed margin value.
-        ntree_limit : int
-            Limit number of trees in the prediction; defaults to
-            best_ntree_limit if defined (i.e. it has been trained with early
-            stopping), otherwise 0 (use all trees).
-        validate_features : bool
-            When this is True, validate that the Booster's and data's
-            feature_names are identical.  Otherwise, it is assumed that the
-            feature_names are the same.
-
-        Returns
-        -------
-        prediction : numpy array
-        """
-        test_dmatrix = DMatrix(data, base_margin=base_margin,
-                               missing=self.missing, nthread=self.n_jobs)
-        if ntree_limit is None:
-            ntree_limit = getattr(self, "best_ntree_limit", 0)
-        class_probs = self.get_booster().predict(
-            test_dmatrix,
+    def predict(
+        self,
+        X,
+        output_margin=False,
+        ntree_limit=None,
+        validate_features=True,
+        base_margin=None
+    ):
+        class_probs = super().predict(
+            X=X,
             output_margin=output_margin,
             ntree_limit=ntree_limit,
-            validate_features=validate_features)
+            validate_features=validate_features,
+            base_margin=base_margin
+        )
         if output_margin:
             # If output_margin is active, simply return the scores
             return class_probs
@@ -1136,13 +1107,13 @@ class XGBClassifier(XGBModel, XGBClassifierBase):
             a numpy array of shape array-like of shape (n_samples, n_classes) with the
             probability of each data example being of a given class.
         """
-        test_dmatrix = DMatrix(X, base_margin=base_margin,
-                               missing=self.missing, nthread=self.n_jobs)
-        if ntree_limit is None:
-            ntree_limit = getattr(self, "best_ntree_limit", 0)
-        class_probs = self.get_booster().predict(test_dmatrix,
-                                                 ntree_limit=ntree_limit,
-                                                 validate_features=validate_features)
+        class_probs = super().predict(
+            X=X,
+            output_margin=False,
+            ntree_limit=ntree_limit,
+            validate_features=validate_features,
+            base_margin=base_margin
+        )
         return _cls_predict_proba(self.objective, class_probs, np.vstack)
 
     def evals_result(self):
@@ -1494,7 +1465,7 @@ class XGBRanker(XGBModel, XGBRankerMixIn):
             xgb_model = xgb_model._Booster  # pylint: disable=protected-access
 
         self._Booster = train(params, train_dmatrix,
-                              self.n_estimators,
+                              self.get_num_boosting_rounds(),
                               early_stopping_rounds=early_stopping_rounds,
                               evals=evals,
                               evals_result=evals_result, feval=feval,
@@ -1502,26 +1473,5 @@ class XGBRanker(XGBModel, XGBRankerMixIn):
                               callbacks=callbacks)
 
         self.objective = params["objective"]
-
-        if evals_result:
-            for val in evals_result.items():
-                evals_result_key = list(val[1].keys())[0]
-                evals_result[val[0]][evals_result_key] = val[1][evals_result_key]
-            self.evals_result = evals_result
-
+        self._set_evaluation_result(evals_result)
         return self
-
-    def predict(self, data, output_margin=False,
-                ntree_limit=0, validate_features=True, base_margin=None):
-
-        test_dmatrix = DMatrix(data, base_margin=base_margin,
-                               missing=self.missing)
-        if ntree_limit is None:
-            ntree_limit = getattr(self, "best_ntree_limit", 0)
-
-        return self.get_booster().predict(test_dmatrix,
-                                          output_margin=output_margin,
-                                          ntree_limit=ntree_limit,
-                                          validate_features=validate_features)
-
-    predict.__doc__ = XGBModel.predict.__doc__

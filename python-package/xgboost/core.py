@@ -262,25 +262,6 @@ def c_array(ctype, values):
     return (ctype * len(values))(*values)
 
 
-def _convert_unknown_data(data, meta=None, meta_type=None):
-    if meta is not None:
-        try:
-            data = np.array(data, dtype=meta_type)
-        except Exception as e:
-            raise TypeError('Can not handle data from {}'.format(
-                type(data).__name__)) from e
-    else:
-        warnings.warn(
-            'Unknown data type: ' + str(type(data)) +
-            ', coverting it to csr_matrix')
-        try:
-            data = scipy.sparse.csr_matrix(data)
-        except Exception as e:
-            raise TypeError('Can not initialize DMatrix from'
-                            ' {}'.format(type(data).__name__)) from e
-    return data
-
-
 class DataIter:
     '''The interface for user defined data iterator. Currently is only
     supported by Device DMatrix.
@@ -542,7 +523,7 @@ class DMatrix:                  # pylint: disable=too-many-instance-attributes
         if group is not None:
             self.set_group(group)
         if qid is not None:
-            dispatch_meta_backend(matrix=self, data=qid, name='qid')
+            self.set_uint_info('qid', qid)
         if label_lower_bound is not None:
             self.set_float_info('label_lower_bound', label_lower_bound)
         if label_upper_bound is not None:
@@ -1740,6 +1721,13 @@ class Booster(object):
                                                           length))
         else:
             raise TypeError('Unknown file type: ', fname)
+
+        if self.attr("best_iteration") is not None:
+            self.best_iteration = int(self.attr("best_iteration"))
+        if self.attr("best_score") is not None:
+            self.best_score = float(self.attr("best_score"))
+        if self.attr("best_ntree_limit") is not None:
+            self.best_ntree_limit = int(self.attr("best_ntree_limit"))
 
     def num_boosted_rounds(self) -> int:
         '''Get number of boosted rounds.  For gblinear this is reset to 0 after

@@ -106,7 +106,7 @@ def test_best_ntree_limit():
         )
 
         if forest:
-            assert cls.best_ntree_limit == rounds * forest * cls.n_classes_
+            assert cls.best_ntree_limit == rounds * forest
         else:
             assert cls.best_ntree_limit == 0
 
@@ -138,6 +138,7 @@ def test_ranking():
     model = xgb.sklearn.XGBRanker(**params)
     model.fit(x_train, y_train, group=train_group,
               eval_set=[(x_valid, y_valid)], eval_group=[valid_group])
+    assert model.evals_result()
 
     pred = model.predict(x_test)
 
